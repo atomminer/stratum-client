@@ -1,0 +1,28 @@
+{
+  "name": "stratum-client",
+  "version": "1.1.0",
+  "keywords": ["stratum","mining"],
+  "description": "Stratum mining client",
+  "engines": {
+    "node": ">=10"
+  },
+  "contributors": [
+    {
+      "name": "AtomMiner",
+      "email": "atom@atomminer.com",
+      "url": "https://atomminer.com"
+    }
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/atomminer/stratum-client.git"
+  },
+  "dependencies": {},
+  "devDependencies": {},
+  "main": "index.js",
+  "scripts": {
+    "test": "node test.js"
+  },
+  "author": "AtomMiner Ltd.",
+  "license": "BSD-4-Clause"
+}

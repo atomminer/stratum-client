@@ -1,6 +1,17 @@
 const TCP = require('./tcp');
 const crypto = require('crypto');
 
+/**
+ * JSON-RPC stratum protocol client. Default protocol is stratum+tcp://
+ * @module tcp/stratum
+ * @typicalname stratum
+ */
+
+ /**
+ * @external TCP
+ * @see {@link ./tcp.md}
+ */
+
 // traditional JSON-RPC stratum protocol over stratum+tcp://
 // When it disconnects (cfg.reconnectOnError tells it what to do):
 // - network error like timeout/server closed connection etc
@@ -156,7 +167,7 @@ class Stratum extends TCP {
 	// i.e. remote host has closed connection
 	onEnd() {
 		this.debug('onEnd');
-		this.status('Remote host has closed connection');
+		this.status = 'Remote host has closed connection';
 		this._online = false;
 	}
 
@@ -179,7 +190,7 @@ class Stratum extends TCP {
 			else timeout = this.opts.reconnectTimeout;
 			const msg = `Reconnecting to ${this.opts.url} in ${Math.floor(timeout / 1000)} second(s)...`; 
 			this.debug(msg);
-			this.status(msg);
+			this.status = msg;
 			this._reconnectTimer = setTimeout(this.connect.bind(this), timeout);
 		}
 	}
@@ -238,22 +249,22 @@ class Stratum extends TCP {
 		if(!cmd.id && !cmd.error && !cmd.result && !cmd.method) throw new Error('Cmd is missing mandatory fields');
 		var processed = false;
 		if(cmd.id == 4) { // mining.ping
-			processed |= this.onPing(cmd);
+			processed = this.onPing(cmd);
 		}
 		else if(cmd.id == 1) { // jsonrpc2.0 login response
-			processed |= this.onLogin(cmd);
+			processed = this.onLogin(cmd);
 		}
 		else if(cmd.id == 2) { // mining.subscribe response
-			processed |= this.onSubscribe(cmd);
+			processed = this.onSubscribe(cmd);
 		}
 		else if(cmd.id == 3) { // mining.authorize response
-			processed |= this.onAuthorize(cmd);
+			processed = this.onAuthorize(cmd);
 		}
 		else if(cmd.method === 'mining.set_difficulty') {
-			this.onDiff(cmd) && (processed = true);
+			processed = this.onDiff(cmd);
 		}
 		else if(cmd.method === 'mining.notify') {
-			this.onNotify(cmd) && (processed = true);
+			processed = this.onNotify(cmd);
 		}
 		// mining.ping might or might not have id. depends on the pool implementation
 		else if(cmd.method === 'mining.ping') {
@@ -261,23 +272,23 @@ class Stratum extends TCP {
 			processed = true;
 		}
 		else if(cmd.method === 'job' && cmd.params) {
-			this.onJob(cmd.params) && (processed = true);
+			processed = this.onJob(cmd.params);
 		}
 		else if(cmd.method === 'mining.set_extranonce') {
-			this.onSetExtraNonce(cmd.params) && (processed = true);
+			processed = this.onSetExtraNonce(cmd.params);
 		}
 		else if(cmd.method === 'client.show_message') {
-			this.onShowMessage(cmd) && (processed = true);
+			processed = this.onShowMessage(cmd)
 		}
 		else if(cmd.method === 'client.reconnect') {
-			this.onReconnect(cmd) && (processed = true);
+			processed = this.onReconnect(cmd);
 		}
 		else if(cmd.method === 'mining.ping') { // some pools are actually sending mining.ping
 			this.send({id: cmd.id || null, result:'pong', error:null});
 			processed = true;
 		}
 		else if(cmd.id >= 20) { // mining.submit response
-			this.onShareResult(cmd) && (processed = true);
+			processed = this.onShareResult(cmd);
 		}
 		else {
 			this.lastError = `Stratum received unknown command ${JSON.stringify(cmd)}`;
@@ -305,7 +316,8 @@ class Stratum extends TCP {
 		this.lastError = '';
 		this._reconnectTimeoutIdx = 0;
 		this.emit('online');
-		this.status('Online');
+		this.status = 'Online';
+		return true;
 	}
 
 	// JSON-RPC2.0 login method
@@ -313,7 +325,7 @@ class Stratum extends TCP {
 		this.debug('onLogin');
 		if(!cmd.result) {
 			this.debug('JSON-RPC 2.0 login failed. Falling back to 1.x')
-			this.status('JSON-RPC 2.0 login failed. Falling back to JSON-RPC 1.x');
+			this.status = 'JSON-RPC 2.0 login failed. Falling back to JSON-RPC 1.x';
 			this._jsonRPC2 = false;
 			this.doConnect();
 		}
@@ -366,10 +378,10 @@ class Stratum extends TCP {
 			if(p && p[0] && p[1] && p[0] === 'mining.notify') {
 				if(p[1].toString() !== this._session) {
 					this._session = p[1].toString();
-					this.status(`Started session ${this._session}`);
+					this.status = `Started session ${this._session}`;
 				}
 				else {
-					this.status(`Resumed previous session ${this._session}`);
+					this.status = `Resumed previous session ${this._session}`;
 				}
 			}
 		}
@@ -430,14 +442,17 @@ class Stratum extends TCP {
 		if(isNaN(len)) len = this._extraNonce.length;
 		if(this._extraNonce.length % 2) this._extraNonce = '0' + this._extraNonce;
 		while (len > this._extraNonce.length) this._extraNonce = '0' + this._extraNonce;
+		return true;
 	}
 
 	onShowMessage(cmd) {
 		this.debug('onShowMessage');
 		if(cmd && cmd.params) {
-			if(Array.isArray(cmd.params)) status(cmd.params[0].toString());
-			else status(cmd.params.toString());
+			if(Array.isArray(cmd.params)) this.status = cmd.params[0].toString();
+			else this.status = cmd.params.toString();
+			return true;
 		}
+		return false;
 	}
 
 	onReconnect(cmd) {
@@ -446,19 +461,21 @@ class Stratum extends TCP {
 			this._online = false;
 			if(cmd.params.length == 1) {
 				this._reconnectTo = {url: cmd.params[0].toString()};
-				this.status(`Stratum requested reconnect to ${cmd.params[0].toString()}`);
+				this.status = `Stratum requested reconnect to ${cmd.params[0].toString()}`;
 			}
 			else if(cmd.params.length == 2) {
 				this._reconnectTo = {host: cmd.params[0], port: cmd.params[1]};
-				this.status(`Stratum requested reconnect to ${cmd.params[0]}:${cmd.params[1]}`);
+				this.status = `Stratum requested reconnect to ${cmd.params[0]}:${cmd.params[1]}`;
 			}
 			else {
 				this.error(`Stratum::onReconnect cant parse reconnect command: ${JSON.stringify(cmd)}`);
 			}
 			
 			this.emit('redirect', this._reconnectTo);
-			setImmediate(() => { this._socket.destroy(); }) 
+			setImmediate(() => { this._socket.destroy(); });
+			return true;
 		}
+		return false;
 	}
 
 	// response to our ping
@@ -500,6 +517,7 @@ class Stratum extends TCP {
 			this.rejected ++;
 			this.emit('rejected', cmd.id);
 		}
+		return true;
 	}
 }
 

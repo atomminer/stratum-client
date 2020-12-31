@@ -1,3 +1,5 @@
+[![node version](https://img.shields.io/badge/node-%3E%3D%2010.0.0-brightgreen?style=plastic)](https://img.shields.io/badge/node-%3E%3D%2010.0.0-brightgreen?style=plastic) [![GitHub code size in bytes](https://img.shields.io/github/languages/code-size/atomminer/stratum-client?style=plastic)](https://img.shields.io/github/languages/code-size/atomminer/stratum-client?style=plastic) [![DeepScan grade](https://deepscan.io/api/teams/12301/projects/15293/branches/302892/badge/grade.svg)](https://deepscan.io/dashboard#view=project&tid=12301&pid=15293&bid=302892)
+
 Stratum Client
 ==============
 
@@ -15,9 +17,19 @@ While curl or libevent can do the trick, it is faster and easier to use nodejs f
 - Supports mining sessions and attempts to reconnect to the previous one if connection was interrupted or broken;
 - Built-in traffic meter that provides handy stats: bytes received and transferred during object lifetime and current session along with average up/down speed.
 
+#### TODO:
+
+- [ ] Verify and test non-yiimp JSON-RPC2.0 pools
+- [ ] TLS support
+- [ ] WS (web-socket) pools support
+- [ ] Add capabilities check
+- [ ] Add compression support for AtomMiner pools
+
+---
+
 ##### Installation
 Can be installed via npm. Requires node 10+. 
-```sh
+```bash
 npm install atomminer/stratum-client
 ```
 Tested with the following node versions: 10.21.0; 10.23.0; 14.13.0; 14.15.3; 15.5.0
@@ -42,7 +54,11 @@ s3.on('job', (j) => {
 });
 s3.connect();
 ```
-check test.js for more info
+check `test.js` for more info
+
+
+##### Reference API
+[Reference API](docs/README.md)
 
 
 ##### License

@@ -1,31 +1,84 @@
 const dns = require('dns');
 const net = require('net');
 const url = require('url');
-const ITransport = require('./transport')
+const ITransport = require('../transport');
 
+/**
+ * Generic TCP transport over raw socket
+ * @module tcp/tcp
+ * @typicalname tcp
+ */
+
+ /**
+ * @external ITransport
+ * @see {@link ../transport.md}
+ */
+
+
+/**
+ * TCP Transport config object
+ * @namespace TCPOptions
+ * @property {string} url=false	URL to connect to. ex: 'tcp://127.0.0.1:8080' or 'localhost:8080'
+ * @property {boolean} keepalive=false	whether set keep-alive flag on the socket or not
+ * @property {boolean} nodelay=false	socket.setNoDelay enable/disable the use of Nagle's algorithm.
+ * @property {boolean} logdataout=false	Enable logging of outgoing data
+ * @property {boolean} logdatain=false Enable logging of incoming data
+ * @property {boolean} lognetstat=false Log network statistics every once in a while
+ * @property {boolean} netstatPeriod=1000 Network statistics refresh period. 0 to disable
+ * @property {boolean} dnsCache=dns.lookup Optional DNS cache. Must implement [DNS Lookup]{@link https://nodejs.org/api/dns.html#dns_dns_lookup_hostname_options_callback}
+ */
 const defaultconfigTCP = {
-	url: null,							// url to connect to. ex: 'tcp://127.0.0.1:8080' or 'localhost:8080' or 'https://atomminer.com'
-	keepalive: false,				// whether set keep-alive flag on the socket or not
-	nodelay: false,					// socket.setNoDelay enable/disable the use of Nagle's algorithm.
+	url: null,
+	keepalive: false,
+	nodelay: false,
 
 	logdataout: false,
 	logdatain: false,
 	lognetstat: false,
-
-	// https://nodejs.org/api/dns.html#dns_dns_lookup_hostname_options_callback
-	//dnsCache: dns.lookup,		// optional dns resolver/cache
-
-	netstatPeriod: 1000,		// netstat refresh period in ms. 0 to disable
+	netstatPeriod: 1000,
+	dnsCache: dns.lookup,
 };
 
-// basic TCP transport over raw socket
-// emits:
-// connected			- 
-// disconnected		- 
-// error					- 
-// status					- status change
 
+//@extends {ITransport} {@link module:transport}
+/**
+ * @class 
+ * @extends {external:ITransport} 
+ * @param {TCPOptions} config TCPOptions configuration object. See See: {@link ~TCPOptions}
+ * @fires connected
+ * @fires disconnected
+ * @fires error
+ * @fires status
+ * @alias module:tcp/tcp
+ * @public
+ */
 class TCPTransport extends ITransport {
+	/**
+	 * Event reporting that socket is connected.
+	 *
+	 * @event connected
+	 */
+
+	 /**
+	 * Event reporting that socket is disconnected.
+	 *
+	 * @event disconnected
+	 */
+
+	/**
+	 * Error event.
+	 *
+	 * @event error
+	 * @property {string|Error} e Error description
+	 */
+
+	 /**
+	 * Status event. Fired when internal status changes
+	 *
+	 * @event status
+	 * @property {string} status New status
+	 */
+
 	constructor(urlOrConfig) { 
 		const opts = (typeof urlOrConfig === 'object') ? {...defaultconfigTCP, ...urlOrConfig} : defaultconfigTCP;
 		if(typeof urlOrConfig == 'string') opts.url = urlOrConfig;
@@ -44,28 +97,75 @@ class TCPTransport extends ITransport {
 		this._downspeed = 0;
 	}
 
-	/////////////////////////////////////////////////////////////////////////////////////////
-	// readonly props
+	/**
+	 * Get protocol type
+	 *
+	 * @readonly
+	 */
 	get type() { return 'rawtcp'; }
+
+	/**
+	 * Check if socket is connected
+	 *
+	 * @readonly
+	 */
 	get connected() { return this._connected; }
 
-	// shows if netstat enabled on this connection
+	/**
+	 * Shows if netstat is enabled and running on this connection
+	 *
+	 * @readonly
+	 */
 	get netstat() { return this.opts.netstatPeriod > 0; }
-	// returns average upload speed in bytes/s
+	
+	/**
+	 * Average upload speed in bytes/s
+	 *
+	 * @readonly
+	 */
 	get upspeed() {return this._upspeed;}
-	// returns average download speed in bytes/s
+	
+	/**
+	 * Average download speed in bytes/s
+	 *
+	 * @readonly
+	 */
 	get downspeed() {return this._downspeed;}
-	// total bytes sent
+	
+	/**
+	 * Total bytes sent
+	 *
+	 * @readonly
+	 */
 	get totalBytesSent() {return this._totalBytesOut;}
-	// total bytes received
+	
+	/**
+	 * Total bytes received
+	 *
+	 * @readonly
+	 */
 	get totalBytesReceived() {return this._totalBytesIn;}
-	// bytes sent since connect/reconnect. Resets when connection is closed.
+	
+	/**
+	 * Bytes sent since connect/reconnect. Resets when connection is closed.
+	 *
+	 * @readonly
+	 */
 	get bytesSent() {return this._bytesOut;}
-	// bytes received since connect/reconnect. Resets when connection is closed.
+	
+	/**
+	 * bytes received since connect/reconnect. Resets when connection is closed.
+	 *
+	 * @readonly
+	 * @memberof TCPTransport
+	 */
 	get bytesReceived() {return this._bytesIn;}
 
-	/////////////////////////////////////////////////////////////////////////////////////////
-	// connects and starts as requested in config
+	/**
+	 * Connect to the socket and start
+	 * @fires connected
+	 * @fires status
+	 */
 	connect() {
 		try {
 			if(!this.opts.url && !this._reconnectTo) {
@@ -76,7 +176,7 @@ class TCPTransport extends ITransport {
 			var constructedUrl = (this.opts.url.indexOf('://') == -1 ? 'tcp://' : '') + this.opts.url;
 			if(this._reconnectTo) {
 				constructedUrl = this._reconnectTo.url ? this._reconnectTo.url : `tcp://${this._reconnectTo.host}:${this._reconnectTo.port}`;
-				// do not save reconnect to. query original source again if disconnected
+				// do not save reconnect to the URL. query original source again if disconnected
 				// idea for AM pool: add ttl as a 3rd param to client.reconnect method
 				this._reconnectTo = null;
 			}
@@ -134,7 +234,7 @@ class TCPTransport extends ITransport {
 			this._bytesIn = 0;
 
 			this._beforeConnect && this._beforeConnect(); // hook. can throw exceptions
-			this.status(`Connecting to ${host}:${port}`);
+			this.status = `Connecting to ${host}:${port}`;
 			this._socket.connect({port:port, host:host, lookup: this.opts.dnsCache || dns.lookup});
 		}
 		catch(e) {
@@ -142,9 +242,11 @@ class TCPTransport extends ITransport {
 		}
 	}
 
-	/////////////////////////////////////////////////////////////////////////////////////////
-	// close socket connection and cleanup timers and socket listeners. no automatic reconnect 
-	// is going to happen when disconnected. onClose is not fired. See also: close()
+	/**
+	 * close socket connection and cleanup timers and socket listeners. no automatic reconnect 
+	 * is going to happen when disconnected. onClose is not fired. Perfect before destroying the object.
+	 * @fires disconnected
+	 */
 	disconnect() {
 		this.debug('disconnect');
 		if(!this._socket) return;
@@ -169,11 +271,13 @@ class TCPTransport extends ITransport {
 		this._connected = false;
 
 		this.emit('disconnected');
-		this.status("Disconnected");
+		this.status = "Disconnected";
 	}
 
-	/////////////////////////////////////////////////////////////////////////////////////////
-	// close connection. onClose will be fired
+	/**
+	 * Close connection. onClose will be fired thus child classes can reconnect if the want to
+	 * @fires disconnected
+	 */
 	close() {
 		this.debug('disconnect');
 		if(!this._socket) return;
@@ -183,8 +287,12 @@ class TCPTransport extends ITransport {
 		// 'disconnected' event will be emitted by onClose listener
 	}
 
-	/////////////////////////////////////////////////////////////////////////////////////////
-	// send data to the server
+	/**
+	 * send data to the server
+	 *
+	 * @param {*} strOrBufferOrObj
+	 * @fires error
+	 */
 	send(strOrBufferOrObj) {
 		if(!this.connected) {
 			this.emit('error', 'Can not send data to closed connection');
@@ -195,43 +303,59 @@ class TCPTransport extends ITransport {
 		this._socket.write(tosend);
 	}
 
-	/////////////////////////////////////////////////////////////////////////////////////////
-	// listeners
+	/**
+	 * Connection estblished callback
+	 */
 	onConnect() {
 		this.debug('onConnect');
 	}
 
-	// i.e. remote host has closed connection
+	/**
+	 * Connection has been closed by remote host callback
+	 */
 	onEnd() {
 		this.debug('onEnd');
 	}
 
-	// connection closed
+	/**
+	 * Connection closed callback
+	 */
 	onClose(hadError) {
 		this.debug('onClose');
 	}
 
-	// connection or data timeout happened
+	/**
+	 * Connection or data timeout callback
+	 */
 	onTimeout() {
 		this.lastError = 'TCPTransport::onTimeout';
 		this.debug(this._lastError);
 		this._socket.destroy();
 	}
 
+	/**
+	 * Socket error callback
+	 * @fires error
+	 */
 	onError(err) {
 		this.lastError = err;
 		this.debug(this._lastError);
 		this._socket.destroy();
 	}
 
+	/**
+	 * Data received callback
+	 */
 	onData(data){
 		this.debug('onData');
 		const sData = data.toString('utf8');
 		if(this.opts.logdatain) this.log('< ' + sData);
 	}
 
-	/////////////////////////////////////////////////////////////////////////////////////////
-	// netstat's up/down speed tracker
+	/**
+	 * Measure up/down speeds and update stats
+	 * @inner
+	 */
 	_measureSpeed() {
 		if(!this._socket) return;
 		if(!this._connected) {

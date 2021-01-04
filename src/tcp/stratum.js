@@ -1,67 +1,191 @@
-const TCP = require('./tcp');
+const TCPTransport = require('./tcp');
 const crypto = require('crypto');
 
 /**
  * JSON-RPC stratum protocol client. Default protocol is stratum+tcp://
+ * 
+ * Typical disconnect reasons:
+ * - network error like timeout, server closed connection, conn refused etc.;
+ * - stratum authorization fails with error;
+ * - internal data buffer has more than 8Kb in it (should not happen if we're using stratum protocol);
+ * - server sends 5 or more unknown/invalid commands one after another;
+ * - no response to login command for 5 seconds;
+ * 
+ * Hard-coded Stratum methods ID's
+ * `1` - jsonrpc2 login
+ * `2` - mining.subscribe
+ * `3` - mining.authorize
+ * `4` - mining.ping
+ * `[5,19]` - reserved
+ * `20+` submit share/response
+ * 
  * @module tcp/stratum
  * @typicalname stratum
  */
 
  /**
- * @external TCP
+ * @external TCPTransport
  * @see {@link ./tcp.md}
  */
 
-// traditional JSON-RPC stratum protocol over stratum+tcp://
-// When it disconnects (cfg.reconnectOnError tells it what to do):
-// - network error like timeout/server closed connection etc
-// - stratum authorization fails with error
-// - internal data buffer has more than 8kb in it (should not happen if we're using stratum)
-// - server sends 5 or more unknown/invalid commands one after another
-// - no response to login command for 30 seconds
-//
-// Stratum cmd's ID
-// 1 - jsonrpc2 login
-// 2 - mining.subscribe
-// 3 - mining.authorize
-// 4 - mining.ping
-// ....
-// 20+ submit share
-//
-// emits inherited from TCPTransport + following:
-// redirect				- stratum requested to reconnect to another host. param is {host, port}
-// online					- authorization passed. pool is online. no param
-// error					- well, error. param is Error
-// status					- stratum status text change. param is new status text
-// diff						- difficulty change. param is new diff (number)
-// job						- new job received. param is the actual job received (object or array)
-// accepted				- share accepted. param is share ID
-// rejected 			- share rejected. param is share ID
+ const cmdPing = JSON.stringify({ id: 4, method: 'mining.ping', params: []}) + '\r\n';
 
-const cmdPing = JSON.stringify({ id: 4, method: 'mining.ping', params: []}) + '\r\n';
-
+/**
+ * Stratum config object. Inherits TCPOptions
+ * @namespace StratumOptions
+ * @property {string} url=null url to connect to. ex: 'tcp://127.0.0.1:8080'. protocol defaults to 
+ * stratum+tcp:// if not specified.
+ * @property {boolean} keepalive=true whether set keep-alive flag on the socket or not.
+ * @property {boolean} nodelay=true	socket.setNoDelay enable/disable the use of Nagle's algorithm.
+ * @property {string} username=null	Stratum login. stratum::Connect will throw an error if username is 
+ * `null` or empty. Always put `stratum.connect` in `try{} catch{}` block.
+ * @property {string} password='x' Stratum password or options as required by the pool. 'x' is the 
+ * most common password for all-default pool settings.
+ * @property {boolean} jsonRPC2=false Indicates that stratum should attempt JSON-RPC 2.0 login first 
+ * and then fallback to 1.x on failure. Defaults to `false` due to the fact that too many pool backends 
+ * do not tolerate unknown commands.
+ * @property {boolean} reconnectSession=true Attempts to use previous mining session on reconnect, if 
+ * supported by the pool.
+ * @property {Number} loginTimeout=5000 Time in ms to wait for authorization/login response. Some dumb pools
+ * ignore mining.authorize and/or login commands if something is wrong, instead of error response. `0` to disable.
+ * @property {boolean} enablePing=false Tells stratum if it should try to use `mining.ping`/`mining.pong` 
+ * methods to keep connection truly alive. Many pools will disconnect client for using `mining.ping`.
+ * @property {boolean} reconnectOnError=true Tells stratum to try to reconnect to the pool on error. If
+ * `false`, stratum client will remain in disconnected state and it is up to external manager to control when to connect again.
+ * @property {Array|Number} reconnectTimeout=[1000,5000,10000,30000] Reconnect timeouts in ms. Use `Number` for 
+ * fixed timeout and `Array` of numbers for more logical dynamic timeouts. Value of `10000` will make this class to
+ * work the same way `cpumier` does. Dynamic (default) timeouts should be more efficient when network error happened by 
+ * reconnecting client within 1s and increasing timeout value if connection keeps failing.
+ * @property {string} algo='' Optional. Algo name for this stratum connection. Will be pretty useful 
+ * for parsing data and assembling mining block with JSON-RPC 1.x pools.
+ * @property {string} id='' Will be generated if left empty string or `null`. Convenience identity field 
+ * to helps save, load and track pools and connections in multi-pool environment.
+ */
 const defaultConfig = {
-	url: null,							// url to connect to. ex: 'tcp://127.0.0.1:8080' or 'localhost:8080' or 'https://atomminer.com'
-	keepalive: true,				// whether set keep-alive flag on the socket or not. must be true for stratum
-	nodelay: true,					// socket.setNoDelay enable/disable the use of Nagle's algorithm.
-	username: null,					// stratum login. connect will throw error if username is null or empty
-	password: 'x',					// default password
-
-	jsonRPC2: false,				// will attempt JSON-RPC 2.0 login first and fallback to 1.x on failure
-	reconnectSession: true, // whether we try to reconnect to previous sessions or starting a new session
-	loginTimeout: 30000,		// timeout to receive login command response. 30 seconds. 0 to disable
-	enablePing: false,			// enables ping-pong command(s) to keep connection truly alive. most pools will kick you out for using ping
-	reconnectOnError: true, // should it automatically try to reconnect after error
-
-	reconnectTimeout: [1000, 5000, 10000, 30000],	// number or array of timeouts
-	// reconnectTimeout: 10000, // fixed timeout like seen in cpuminer and others
-
-	// auxilary helpers and what not
-	algo: '',								// not required. for convinience only. most likely will be required to generate data for JSON-RPC 1.x jobs
-	id: '',									// will be created if empty to help save/load pool setting
+	url: null,
+	keepalive: true,
+	nodelay: true,
+	username: null,
+	password: 'x',
+	
+	jsonRPC2: false,
+	reconnectSession: true,
+	loginTimeout: 5000,
+	enablePing: false,
+	
+	reconnectOnError: true,
+	reconnectTimeout: [1000, 5000, 10000, 30000],
+	
+	algo: '',
+	id: '',
 }
 
-class Stratum extends TCP {
+/**
+ * @class 
+ * @extends {external:TCPTransport} 
+ * @param {StratumOptions} config StratumOptions configuration object. See: {@link ~StratumOptions}
+ * @fires connected
+ * @fires disconnected
+ * @fires error 
+ * @fires status
+ * @fires redirect
+ * @fires online
+ * @fires diff
+ * @fires job
+ * @fires accepted
+ * @fires rejected
+ * @alias module:tcp/stratum
+ * @public
+ */
+class Stratum extends TCPTransport {
+	/**
+	 * Event reporting that socket is connected. Fired by parent class TCPTransport
+	 * @event connected
+	 * @instance
+	 */
+
+	 /**
+	 * Event reporting that socket is disconnected. Fired by parent class TCPTransport
+	 * @event disconnected
+	 * @instance
+	 */
+
+	 /**
+	 * Error event.  Fired by parent class TCPTransport
+	 * @event error
+	 * @property {string|Error} e Error description
+	 * @instance
+	 */
+
+	 /**
+	 * Status event. Fired when internal status changes. Fired by parent class TCPTransport
+	 * @event status
+	 * @property {string} status New status
+	 * @instance
+	 */
+
+	 /**
+	 * Reconnect event. Fired when pool is requesting to reconnect to another port/URL. No action 
+	 * required if `stratum.config.reconnectOnError` is set to `true`.
+	 * @event redirect
+	 * @property {Object} r Contains reconnect info: either `r.url` or `r.host` and `r.port` should be provided.
+	 * @instance
+	 */
+
+	 /**
+	 * Online event. Fired when stratum server confirms authorization/login
+	 * @event online
+	 * @instance
+	 */
+
+	 /**
+	 * Difficulty changed event. Fired when pool changes target difficulty
+	 * @event diff
+	 * @property {Number} diff New difficulty
+	 * @instance
+	 */
+
+	 /**
+	 * New job received event.
+	 * @event job
+	 * @property {Array|Object} job `Object` containing job data blob for JSON-RPC 2.0 pools; 
+	 * and `Array` for JSON-RPC 1.x pools
+	 * @instance
+	 */
+
+	 /**
+	 * Share accepted event.
+	 * @event accepted
+	 * @property {Number} id ID of the share that was accepted by the pool. Actual share data 
+	 * like nonce, extra nonce etc. should be tracked somewhere else
+	 * @instance
+	 */
+
+	 /**
+	 * Share rejected event.
+	 * @event rejected
+	 * @property {Number} id Same as accepted, only fired when share was rejected by the pool.
+	 * @instance
+	 */
+
+	 /**
+	 * Connect to the stratum server
+	 * @function connect
+	 * @instance
+	 */
+
+	 /**
+	 * Permanently close connection to the pool and destroy all internal timers.
+	 * @function disconnect
+	 * @instance
+	 */
+
+	 /**
+	 * Close connection to the pool and let current instance to decide if it wants to reconnect, when and where to.
+	 * @function close
+	 * @instance
+	 */
+
 	constructor(config) { 
 		var opts = {...defaultConfig, ...config};
 		super(opts);
@@ -93,14 +217,45 @@ class Stratum extends TCP {
 		}
 	}
 
-	// readonly
+	/**
+	 * Get protocol type. Either `stratum` or `stratum2.0`
+	 *
+	 * @readonly
+	 */
 	get type() { return this._jsonRPC2 ? 'stratum2.0' : 'stratum'; }
+	
+	/**
+	 * Check if stratum clien is online. I.e if authorization/login was accepted by the server
+	 *
+	 * @readonly
+	 */
 	get online() { return this._online; }
+
+	/**
+	 * Current algo. See {@link ~StratumOptions}
+	 *
+	 * @readonly
+	 */
 	get algo() { return this.opts.algo; }
+
+	/**
+	 * Check if JSON-RPC 2.0 login was accepted and we're working in 2.0 mode {@link ~StratumOptions}
+	 *
+	 * @readonly
+	 */
 	get jsonRPC2() { return this._jsonRPC2; };
+
+	/**
+	 * This class pseudo-unique ID
+	 *
+	 * @readonly
+	 */
 	get id() {return this.opts.id; }
 
-	// methods
+	/**
+	 * Before connect hook. Called right before socket.connect
+	 * @inner
+	 */
 	_beforeConnect() {
 		this.debug('beforeConnect');
 		this._supportPingPong = false;
@@ -111,6 +266,10 @@ class Stratum extends TCP {
 		}
 	}
 
+	/**
+	 * Before disconnect hook. Called right before `'disconnect'`
+	 * @inner
+	 */
 	_beforeDisconnect() {
 		if(this.__loginTimeout) {
 			clearTimeout(this.__loginTimeout);
@@ -130,6 +289,10 @@ class Stratum extends TCP {
 		//this._job = null;
 	}
 
+	/**
+	 * Sends initial messages (`login` or `mining.subscribe` + `mining.authorize`) to the server once socket is connected
+	 * @inner
+	 */
 	doConnect() {
 		if(this.opts.jsonRPC2) { // if we should attempt JSON-RPC 2.0 login
 			const cmd = { id: 1, method: 'login', params: { login: this.opts.username, pass: this.opts.password || 'x', agent: this.AGENT} };
@@ -145,6 +308,10 @@ class Stratum extends TCP {
 		}
 	}
 
+	/**
+	 * Called when loginTimeout expired with no response from the pool server. Will cause disconnect
+	 * @inner
+	 */
 	_onLoginTimeout() {
 		if(!this._online) {
 			this.lastError = 'Stratum login timeout reached';
@@ -153,6 +320,10 @@ class Stratum extends TCP {
 		}
 	}
 
+	/**
+	 * Called by TCPTransport when connection to the pool is established.
+	 * @inner
+	 */
 	onConnect() {
 		this.debug('onConnect');
 		this._connectedTime = +new Date();
@@ -164,14 +335,21 @@ class Stratum extends TCP {
 		this.doConnect();
 	}
 
-	// i.e. remote host has closed connection
+	/**
+	 * Called by TCPTransport when remote host has closed connection.
+	 * @inner
+	 */
 	onEnd() {
 		this.debug('onEnd');
 		this.status = 'Remote host has closed connection';
 		this._online = false;
 	}
 
-	// connection closed
+	/**
+	 * Called by TCPTransport when socket connections is closed. **!!!NOTE!!!** `onClose` is not called on `stratum.disconnect()`
+	 * thus preventing automatic reconnect. Use `stratum.close()` if reconnect required.
+	 * @inner
+	 */
 	onClose(hadError) {
 		this.debug('onClose');
 
@@ -195,13 +373,20 @@ class Stratum extends TCP {
 		}
 	}
 
-	// connection or data timeout happened
+	/**
+	 * Called by TCPTransport on timeout and onLoginTimeout.
+	 * @inner
+	 */
 	onTimeout() {
 		this.debug('onTimeout');
 		// https://nodejs.org/api/net.html#net_event_timeout
 		process.nextTick(() => {this._socket.destroy()});
 	}
 
+	/**
+	 * Erro handler
+	 * @inner
+	 */
 	onError(err) {
 		var s = 'Error ';
 		if(err.code ) s += err.code + ' ';
@@ -214,6 +399,10 @@ class Stratum extends TCP {
 		if(err.code === 'EREFUSED' && Array.isArray(this.opts.reconnectTimeout)) this._reconnectTimeoutIdx = this.opts.reconnectTimeout.length;
 	}
 
+	/**
+	 * Data received on the underlying socket
+	 * @inner
+	 */
 	onData(data){
 		//this.debug('onData'); // too noisy even for debug
 		const sData = data.toString('utf8');
@@ -244,6 +433,10 @@ class Stratum extends TCP {
 		}
 	}
 
+	/**
+	 * Decode and process stratum command/method
+	 * @inner
+	 */
 	onCommand(cmd) {
 		if(!cmd) throw new Error('Cmd is null');
 		if(!cmd.id && !cmd.error && !cmd.result && !cmd.method) throw new Error('Cmd is missing mandatory fields');
@@ -283,8 +476,8 @@ class Stratum extends TCP {
 		else if(cmd.method === 'client.reconnect') {
 			processed = this.onReconnect(cmd);
 		}
-		else if(cmd.method === 'mining.ping') { // some pools are actually sending mining.ping
-			this.send({id: cmd.id || null, result:'pong', error:null});
+		else if(cmd.method === 'mining.pong') { // some pools are actually sending mining.ping
+			this.onPing({result: true});
 			processed = true;
 		}
 		else if(cmd.id >= 20) { // mining.submit response
@@ -292,19 +485,21 @@ class Stratum extends TCP {
 		}
 		else {
 			this.lastError = `Stratum received unknown command ${JSON.stringify(cmd)}`;
-			this.error(this._lastError);
 		}
 
 		this._invalidCmdCount += processed ? 0 : 1;
 
 		if(this._invalidCmdCount >= 5) {
 			this.lastError = `Received too many incorrect commands from stratum. Disconnecting`;
-			this.error(this._lastError);
 			this._invalidCmdCount ++;
 		}
 	}
 
-	// internal. called up when either login or mining.authorize are good
+	/**
+	 * Internal. Called up when either login or mining.authorize are accepted by the pool
+	 * @fires online
+	 * @inner
+	 */
 	onLoggedIn() {
 		this.debug('onLoggedIn - Login success')
 		if(this.__loginTimeout) {
@@ -320,7 +515,10 @@ class Stratum extends TCP {
 		return true;
 	}
 
-	// JSON-RPC2.0 login method
+	/**
+	 * JSON-RPC 2.0 login method response handler
+	 * @inner
+	 */
 	onLogin(cmd) {
 		this.debug('onLogin');
 		if(!cmd.result) {
@@ -338,7 +536,11 @@ class Stratum extends TCP {
 		return true;
 	}
 
-	// job received
+	/**
+	 * Called when new job received from the pool
+	 * @fires job
+	 * @inner
+	 */
 	onJob(job) {
 		this.debug('onJob');
 		if(job) {
@@ -349,7 +551,10 @@ class Stratum extends TCP {
 		return true;
 	}
 
-	// mining.subscribe
+	/**
+	 * `mining.subscribe` response handler
+	 * @inner
+	 */
 	onSubscribe(cmd) {
 		this.debug('onSubscribe');
 		// am, yiimp, nomp: note, mining.set_difficulty can be either string or number! 
@@ -407,13 +612,22 @@ class Stratum extends TCP {
 		return true;
 	}
 
+	/**
+	 * `mining.notify` handler
+	 * @fires job
+	 * @inner
+	 */
 	onNotify(cmd) {
 		this.debug('onNotify');
 		if(cmd.params) this.onJob(cmd.params);
 		return true;
 	}
 
-	// mining.authorize
+	/**
+	 * `mining.authorize` handlers
+	 * @fires login
+	 * @inner
+	 */
 	onAuthorize(cmd) {
 		this.debug('onAuthorize');
 		if(cmd.result) {
@@ -427,6 +641,10 @@ class Stratum extends TCP {
 		return true;
 	}
 
+	/**
+	 * Internal. Parse extra nonce
+	 * @inner
+	 */
 	onSetExtraNonce(params) {
 		// only ['00000001', 4] or ['00000001', '4'] parsed here
 		if(!(params && Array.isArray(params))) return true;
@@ -445,6 +663,11 @@ class Stratum extends TCP {
 		return true;
 	}
 
+	/**
+	 * `client.show_message` handler
+	 * @fires status
+	 * @inner
+	 */
 	onShowMessage(cmd) {
 		this.debug('onShowMessage');
 		if(cmd && cmd.params) {
@@ -455,6 +678,11 @@ class Stratum extends TCP {
 		return false;
 	}
 
+	/**
+	 * `client.reconnect` handler
+	 * @fires redirect
+	 * @inner
+	 */
 	onReconnect(cmd) {
 		this.debug('onReconnect');
 		if(cmd && cmd.params && Array.isArray(cmd.params)) {
@@ -478,7 +706,10 @@ class Stratum extends TCP {
 		return false;
 	}
 
-	// response to our ping
+	/**
+	 * `mining.ping` handler
+	 * @inner
+	 */
 	onPing(cmd) {
 		this.debug('onPing');
 		this._supportPingPong = cmd.result === true;
@@ -489,7 +720,11 @@ class Stratum extends TCP {
 		return true;
 	}
 
-	//mining.set_difficulty
+	/**
+	 * `mining.set_difficulty` handler
+	 * @fires diff
+	 * @inner
+	 */
 	onDiff(cmd) {
 		this.debug('onDiff');
 		var processed = false;
@@ -507,6 +742,12 @@ class Stratum extends TCP {
 		return processed;
 	}
 
+	/**
+	 * Share result handler
+	 * @fires accepted
+	 * @fires rejected
+	 * @inner
+	 */
 	onShareResult(cmd) {
 		this.debug('onDiff');
 		if(cmd.result) {

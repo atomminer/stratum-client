@@ -102,7 +102,7 @@ class ITransport extends EventEmitter {
 		super();
 		this._status = 'Offline';
 		this.logger = null; // use global logger by default
-		this.config(config ? { ...defaultconfig, ...config } : defaultconfig);
+		this.opts = config ? { ...defaultconfig, ...config } : defaultconfig;
 		this._lastError = '';
 	}
 

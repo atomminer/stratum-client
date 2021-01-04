@@ -40,7 +40,6 @@ const defaultconfigTCP = {
 };
 
 
-//@extends {ITransport} {@link module:transport}
 /**
  * @class 
  * @extends {external:ITransport} 

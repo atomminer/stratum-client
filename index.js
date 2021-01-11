@@ -4,6 +4,7 @@
  * @alias module:stratum-client
  * */
 const Stratum = require('./src/tcp/stratum');
+const Transport = require('./src/transport');
 
 /**
  * Stratum client
@@ -13,4 +14,5 @@ const Stratum = require('./src/tcp/stratum');
 
 module.exports = {
 	Stratum,
+	Transport
 }

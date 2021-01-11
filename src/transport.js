@@ -95,6 +95,7 @@ var agent = 'atomminer/1.1.0';
  * @fires ITransport#error
  * @fires ITransport#status
  * @alias module:transport
+ * @exports
  * @public
  */
 class ITransport extends EventEmitter {

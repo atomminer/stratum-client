@@ -197,6 +197,8 @@ class Stratum extends TCPTransport {
 		this._diff = 1;
 		this._invalidCmdCount = 0;
 
+		this._shareID = 19;
+
 		this.accepted = 0;
 		this.rejected = 0;
 
@@ -253,6 +255,24 @@ class Stratum extends TCPTransport {
 	get id() {return this.opts.id; }
 
 	/**
+	 * Submit share to the pool server
+	 * @param {object} data Solution data to send as an answer
+	 * @throws
+	 */
+	submit(data) {
+		if(this._jsonRPC2) throw new Error('Stratum::submit Not Implemented');
+		// RPC 1.x
+		if(!(data && data.job && data.nonce && data.nonce2 && data.time)) throw new Error('Stratum::submit Invalid data');
+		this._shareID++;
+		const cmd = { 
+			id: this._shareID, 
+			method: 'mining.submit', 
+			params: [this.config.username, data.job, data.nonce2, data.time, data.nonce],
+		};
+		this.send(cmd)
+	}
+
+	/**
 	 * Before connect hook. Called right before socket.connect
 	 * @inner
 	 */
@@ -261,6 +281,7 @@ class Stratum extends TCPTransport {
 		this._supportPingPong = false;
 		this._rcvBuffer = '';
 		this._invalidCmdCount = 0;
+		this._shareID = 19;
 		if(!this.opts.username) {
 			throw new Error('Stratum requires username to be not null');
 		}
